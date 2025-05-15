@@ -3,7 +3,8 @@ using System.Windows.Forms;         // for windows forms, duh!
 using System.Threading;             //used for thread.sleep
 using System.Diagnostics;           //performance counter usage
 using System.IO;                    //get hard drive statistics
-using System.Speech.Synthesis;      //text to speech
+using System.Speech.Synthesis;
+using Microsoft.VisualBasic;      //text to speech
 
 namespace HDD_Info
 {
@@ -34,14 +35,13 @@ namespace HDD_Info
             CPUTB.Text = (int)cpuCounter.NextValue() + "%";
 
             double  RAMConverted = FreeRamCounter.NextValue() / 1024;  //get mb ram free, convert to GB
-            double  TotalMemory = new Microsoft.VisualBasic.Devices.ComputerInfo().TotalPhysicalMemory/1024/1024/1024+1;
+            double  TotalMemory = new Microsoft.VisualBasic.Devices.ComputerInfo().TotalPhysicalMemory/ 1024/1024/1024 + 1;
 
             //get the uptime in hours, minutes, etc instead of just seconds
             TimeSpan UpTimeSpan = TimeSpan.FromSeconds(UptimeCounter.NextValue());
 
-            UpTimeTB.Text = string.Format("{0}Days {1}H {2}M {3}S",
+            UpTimeTB.Text = string.Format("{0} Days {1}H {2}M {3}S",
                 (int)UpTimeSpan.TotalDays, UpTimeSpan.Hours, UpTimeSpan.Minutes, UpTimeSpan.Seconds);
-
             MemoryTB.Text = RAMConverted.ToString("n2") + " GB of " + TotalMemory.ToString() + " GB";  //store free ant total ram
             ComputerNameTB.Text = Environment.MachineName;  //computer's name
             UserNameTB.Text = Environment.UserName;  //current user
@@ -64,11 +64,11 @@ namespace HDD_Info
         private void DriveTimer_Tick(object sender, EventArgs e)  //every second, get latest drive stats
         {
             string DL= DriveCB.SelectedItem.ToString().Substring(0,1);  //get first char of selected drive  (the drive letter)
-            float FreeSpace, TotalSpace, UsedSpace, UsedPercent;  //storage variables
+            double FreeSpace, TotalSpace, UsedSpace, UsedPercent;  //storage variables
             string FreeSpaceSuffix, TotalSpaceSuffix, UsedSpaceSuffix;   //Free, used, total either GB or TB
             DriveInfo D = new DriveInfo(DL);  //get stats for selected drive
 
-            FreeSpace = D.AvailableFreeSpace / 1024 / 1024/1024;  //convert to gb, original value in bytes
+            FreeSpace = (D.AvailableFreeSpace / (1024.0 * 1024 * 1024));  //convert to gb, original value in bytes
             if (FreeSpace >= 1024)  //if free space GB > 1024 convert to TB
             {
                 FreeSpace /= 1024;
@@ -77,7 +77,7 @@ namespace HDD_Info
             else
                 FreeSpaceSuffix = " GB";    //if space less than 1024gb
 
-            TotalSpace = D.TotalSize / 1024 / 1024 / 1024;
+            TotalSpace = D.TotalSize / (1024.0 * 1024 * 1024);
             if (TotalSpace >= 1024)
             {
                 TotalSpace /= 1024;
@@ -86,7 +86,7 @@ namespace HDD_Info
             else
                 TotalSpaceSuffix = " GB";
 
-            UsedSpace = (D.TotalSize - D.AvailableFreeSpace) / 1024 / 1024 / 1024;
+            UsedSpace = (D.TotalSize - D.AvailableFreeSpace) / (1024.0 * 1024 * 1024);
             if (UsedSpace >= 1024)
             {
                 UsedSpace /=  1024;
@@ -103,6 +103,7 @@ namespace HDD_Info
             UsedTB.Text = UsedSpace.ToString("n2") + UsedSpaceSuffix;  //used
         }
 
+        #region Options menu items
         private void EXitToolStripMenuItem_Click(object sender, EventArgs e)
         {
             Application.Exit();  //close program
@@ -143,5 +144,7 @@ namespace HDD_Info
             Chuck.SpeakAsync("Current User:  " + UserNameTB.Text);
             Chuck.SpeakAsync("Up Time:  " + UpTimeTB.Text);
         }
+        #endregion
+
     }
 }
