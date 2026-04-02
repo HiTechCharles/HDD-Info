@@ -8,9 +8,9 @@ using System.Runtime.InteropServices;
 [assembly: AssemblyTitle("HDD Info")]
 [assembly: AssemblyDescription("")]
 [assembly: AssemblyConfiguration("")]
-[assembly: AssemblyCompany("HP")]
+[assembly: AssemblyCompany("HiTechCharles")]
 [assembly: AssemblyProduct("HDD Info")]
-[assembly: AssemblyCopyright("Copyright © HP 2023")]
+[assembly: AssemblyCopyright("Copyright © HP 2026 HiTechCharles")]
 [assembly: AssemblyTrademark("")]
 [assembly: AssemblyCulture("")]
 

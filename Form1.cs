@@ -1,150 +1,339 @@
 ﻿using System;
-using System.Windows.Forms;         // for windows forms, duh!
-using System.Threading;             //used for thread.sleep
-using System.Diagnostics;           //performance counter usage
-using System.IO;                    //get hard drive statistics
+using System.Windows.Forms;
+using System.Diagnostics;
+using System.IO;
 using System.Speech.Synthesis;
-using Microsoft.VisualBasic;      //text to speech
+using System.Management;
+using Microsoft.VisualBasic.Devices;
 
 namespace HDD_Info
 {
     public partial class Form1 : Form
     {
+        #region Fields
+        // Performance counters reused (avoid recreating every tick)
+        private PerformanceCounter _cpuCounter;
+        private PerformanceCounter _freeRamCounter;
+        private PerformanceCounter _uptimeCounter;
+
+        // Reuse the speech synthesizer (dispose on close)
+        private SpeechSynthesizer _tts;
+
+        // Cache total memory (doesn't change at runtime)
+        private double _totalMemoryGB;
+
+        // Constants
+        private const int TTS_VOLUME = 100;
+        private const int TTS_RATE = 3;
+        private const double BYTES_TO_GB = 1024.0 * 1024.0 * 1024.0;
+        private const int COUNTER_PRIME_DELAY_MS = 100;
+
+        // Event to signal when loading is complete
+        public event EventHandler LoadingComplete;
+        #endregion
+
         public Form1()
         {
             InitializeComponent();
         }
 
-        private void UpdateTimer_Tick(object sender, EventArgs e)  //show computer info,  and update it every second
+        protected override void OnLoad(EventArgs e)
         {
-            #region Performance Counters
-            PerformanceCounter cpuCounter = new PerformanceCounter("Processor", "% Processor Time", "_Total");   //gets cpu usage %
-            PerformanceCounter FreeRamCounter = new PerformanceCounter("Memory", "Available MBytes");  //available memory in mb
-            PerformanceCounter UptimeCounter = new PerformanceCounter("System",
-                "System Up Time");  //system uptime
+            base.OnLoad(e);
 
-            cpuCounter.NextValue();  //first performance counters values will be 0
-            FreeRamCounter.NextValue();
-            UptimeCounter.NextValue();
-            //wait 0.5 seconds to give the computer time to get usable values
-            Thread.Sleep(500);
-            #endregion
+            try
+            {
+                // Initialize and prime performance counters
+                _cpuCounter = new PerformanceCounter("Processor", "% Processor Time", "_Total");
+                _freeRamCounter = new PerformanceCounter("Memory", "Available MBytes");
+                _uptimeCounter = new PerformanceCounter("System", "System Up Time");
 
-            #region display computer info
-            //store cpu percentage as integer,  display in CPUTB
-            CPUTB.Text = (int)cpuCounter.NextValue() + "%";
+                // Prime the counters once (first NextValue() often returns 0)
+                _cpuCounter.NextValue();
+                _freeRamCounter.NextValue();
+                _uptimeCounter.NextValue();
 
-            double  RAMConverted = FreeRamCounter.NextValue() / 1024;  //get mb ram free, convert to GB
-            double  TotalMemory = new Microsoft.VisualBasic.Devices.ComputerInfo().TotalPhysicalMemory/ 1024/1024/1024 + 1;
+                // Small delay for accurate first reading
+                System.Threading.Thread.Sleep(COUNTER_PRIME_DELAY_MS);
 
-            //get the uptime in hours, minutes, etc instead of just seconds
-            TimeSpan UpTimeSpan = TimeSpan.FromSeconds(UptimeCounter.NextValue());
+                // Cache total memory once (round up to nearest GB)
+                _totalMemoryGB = Math.Ceiling(new ComputerInfo().TotalPhysicalMemory / BYTES_TO_GB);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(
+                    $"Failed to initialize performance counters: {ex.Message}",
+                    "Initialization Error",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning);
+            }
 
-            UpTimeTB.Text = string.Format("{0} Days {1}H {2}M {3}S",
-                (int)UpTimeSpan.TotalDays, UpTimeSpan.Hours, UpTimeSpan.Minutes, UpTimeSpan.Seconds);
-            MemoryTB.Text = RAMConverted.ToString("n2") + " GB of " + TotalMemory.ToString() + " GB";  //store free ant total ram
-            ComputerNameTB.Text = Environment.MachineName;  //computer's name
-            UserNameTB.Text = Environment.UserName;  //current user
-            #endregion
+            // Initialize TTS engine
+            _tts = new SpeechSynthesizer
+            {
+                Volume = TTS_VOLUME,
+                Rate = TTS_RATE
+            };
+
+            // Populate drives
+            RefreshDriveList();
+
+            // Trigger initial timer ticks to populate data
+            UpdateTimer_Tick(null, EventArgs.Empty);
+            DriveTimer_Tick(null, EventArgs.Empty);
+
+            // Signal that loading is complete
+            LoadingComplete?.Invoke(this, EventArgs.Empty);
         }
 
-        private void Form1_Load(object sender, EventArgs e)
+        protected override void OnFormClosing(FormClosingEventArgs e)
         {
-            DriveInfo[] allDrives = DriveInfo.GetDrives();
-            foreach (DriveInfo d in allDrives)   //get list of hard drives and add to combo box 
+            base.OnFormClosing(e);
+
+            // Dispose managed resources
+            _cpuCounter?.Dispose();
+            _freeRamCounter?.Dispose();
+            _uptimeCounter?.Dispose();
+            _tts?.Dispose();
+        }
+
+        private void RefreshDriveList()
+        {
+            DriveCB.Items.Clear();
+
+            try
             {
-                if (d.IsReady == true)   //if drive is available 
+                DriveInfo[] allDrives = DriveInfo.GetDrives();
+                foreach (DriveInfo drive in allDrives)
                 {
-                    DriveCB.Items.Add(d.Name.Substring(0, 2) + " " + d.VolumeLabel);  //adds drive letter and name
+                    if (drive.IsReady)
+                    {
+                        // Store the full drive path in the entry, display a friendly label
+                        string display = $"{drive.Name.TrimEnd('\\')} {drive.VolumeLabel}";
+                        DriveCB.Items.Add(new DriveEntry(drive.Name, display));
+                    }
                 }
             }
-            DriveCB.SelectedIndex = 0;  //select first drive in list
+            catch (Exception ex)
+            {
+                MessageBox.Show(
+                    $"Error refreshing drive list: {ex.Message}",
+                    "Drive Error",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning);
+            }
+
+            if (DriveCB.Items.Count > 0)
+            {
+                DriveCB.SelectedIndex = 0;
+            }
         }
 
-        private void DriveTimer_Tick(object sender, EventArgs e)  //every second, get latest drive stats
+        private void UpdateTimer_Tick(object sender, EventArgs e)
         {
-            string DL= DriveCB.SelectedItem.ToString().Substring(0,1);  //get first char of selected drive  (the drive letter)
-            double FreeSpace, TotalSpace, UsedSpace, UsedPercent;  //storage variables
-            string FreeSpaceSuffix, TotalSpaceSuffix, UsedSpaceSuffix;   //Free, used, total either GB or TB
-            DriveInfo D = new DriveInfo(DL);  //get stats for selected drive
-
-            FreeSpace = (D.AvailableFreeSpace / (1024.0 * 1024 * 1024));  //convert to gb, original value in bytes
-            if (FreeSpace >= 1024)  //if free space GB > 1024 convert to TB
+            try
             {
-                FreeSpace /= 1024;
-                FreeSpaceSuffix = " TB";
-            }
-            else
-                FreeSpaceSuffix = " GB";    //if space less than 1024gb
+                // CPU usage
+                float cpuVal = _cpuCounter?.NextValue() ?? 0f;
+                CPUTB.Text = $"{(int)cpuVal}%";
 
-            TotalSpace = D.TotalSize / (1024.0 * 1024 * 1024);
-            if (TotalSpace >= 1024)
+                // Memory (use cached total memory)
+                double freeMemoryGB = (_freeRamCounter?.NextValue() ?? 0f) / 1024.0;  // MB -> GB
+                MemoryTB.Text = $"{freeMemoryGB:N2} GB of {_totalMemoryGB:N2} GB";
+
+                // Uptime
+                TimeSpan upTimeSpan = TimeSpan.FromSeconds(_uptimeCounter?.NextValue() ?? 0.0);
+                UpTimeTB.Text = $"{(int)upTimeSpan.TotalDays} Days {upTimeSpan.Hours}H {upTimeSpan.Minutes}M {upTimeSpan.Seconds}S";
+
+                ComputerNameTB.Text = Environment.MachineName;
+                UserNameTB.Text = Environment.UserName;
+            }
+            catch (Exception ex)
             {
-                TotalSpace /= 1024;
-                TotalSpaceSuffix = " TB";
+                Debug.WriteLine($"Error updating system info: {ex.Message}");
             }
-            else
-                TotalSpaceSuffix = " GB";
+        }
 
-            UsedSpace = (D.TotalSize - D.AvailableFreeSpace) / (1024.0 * 1024 * 1024);
-            if (UsedSpace >= 1024)
+        private void DriveTimer_Tick(object sender, EventArgs e)
+        {
+            if (!(DriveCB.SelectedItem is DriveEntry entry))
             {
-                UsedSpace /=  1024;
-                UsedSpaceSuffix = " TB";
+                return;
             }
-            else
-                UsedSpaceSuffix = " GB";
 
-            UsedPercent = 100 - (D.AvailableFreeSpace / (float)D.TotalSize) * 100;  //% full
+            try
+            {
+                var drive = new DriveInfo(entry.Path);
+                if (!drive.IsReady)
+                {
+                    SetDriveInfoUnavailable();
+                    return;
+                }
 
-            PercentUsedTB.Text = UsedPercent.ToString("n2");  //disk percent used
-            FreeTB.Text = FreeSpace.ToString("n2") + FreeSpaceSuffix;  //free
-            TotalTB.Text = TotalSpace.ToString("n2") + TotalSpaceSuffix;  //total
-            UsedTB.Text = UsedSpace.ToString("n2") + UsedSpaceSuffix;  //used
+                double freeSpaceGB = drive.AvailableFreeSpace / BYTES_TO_GB;
+                double totalSpaceGB = drive.TotalSize / BYTES_TO_GB;
+                double usedSpaceGB = (drive.TotalSize - drive.AvailableFreeSpace) / BYTES_TO_GB;
+
+                double usedPercent = (1.0 - ((double)drive.AvailableFreeSpace / drive.TotalSize)) * 100.0;
+                usedPercent = Clamp(usedPercent, 0, 100);
+
+                PercentUsedTB.Text = usedPercent.ToString("N2");
+                FreeTB.Text = StorageHelper.FormatStorageSize(freeSpaceGB);
+                TotalTB.Text = StorageHelper.FormatStorageSize(totalSpaceGB);
+                UsedTB.Text = StorageHelper.FormatStorageSize(usedSpaceGB);
+            }
+            catch (IOException ex)
+            {
+                Debug.WriteLine($"Drive I/O error: {ex.Message}");
+                SetDriveInfoUnavailable();
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"Unexpected drive error: {ex.Message}");
+                SetDriveInfoUnavailable();
+            }
+        }
+
+        private void SetDriveInfoUnavailable()
+        {
+            PercentUsedTB.Text = FreeTB.Text = TotalTB.Text = UsedTB.Text = "N/A";
+        }
+
+        /// <summary>
+        /// Replaces storage unit abbreviations with full words for text-to-speech.
+        /// </summary>
+        private string FormatTextForSpeech(string text)
+        {
+            return text
+                .Replace("GB", "gigabytes")
+                .Replace("TB", "terabytes")
+                .Replace("%", " percent");
         }
 
         #region Options menu items
         private void EXitToolStripMenuItem_Click(object sender, EventArgs e)
         {
-            Application.Exit();  //close program
+            Application.Exit();
         }
 
         private void RefreshToolStripMenuItem_Click(object sender, EventArgs e)
         {
-            DriveCB.Items.Clear();  //clear combobox
-            DriveInfo[] allDrives = DriveInfo.GetDrives();
-            foreach (DriveInfo d in allDrives)   //get list of hard drives and add to combo box 
-            {
-                if (d.IsReady == true)   //if drive is available 
-                {
-                    DriveCB.Items.Add(d.Name.Substring(0, 2) + " " + d.VolumeLabel);  //adds drive letter and name
-                }
-            }
-            DriveCB.SelectedIndex = 0;  //select first drive in list
+            RefreshDriveList();
         }
 
         private void SpeakCurrentDriToolStripMenuItem_Click(object sender, EventArgs e)
         {
-            SpeechSynthesizer Chuck = new SpeechSynthesizer(); //start speech synth
-            string selected = this.DriveCB.GetItemText(this.DriveCB.SelectedItem);
-            Chuck.SpeakAsync("Drive selected: " + selected);
-            Chuck.SpeakAsync("Free Space:  " + FreeTB.Text);
-            Chuck.SpeakAsync("Percent used:  " + PercentUsedTB.Text);
-            Chuck.SpeakAsync("Used Space:  " + UsedTB.Text);
-            Chuck.SpeakAsync("Drive Capacity:  " + TotalTB.Text);
-       }
+            if (DriveCB.SelectedItem == null)
+            {
+                return;
+            }
+
+            var selected = DriveCB.GetItemText(DriveCB.SelectedItem);
+            var infoToSpeak = new[]
+            {
+                $"Drive Selected: {selected}",
+                $"Free Space: {FreeTB.Text}",
+                $"Percent Used: {PercentUsedTB.Text}",
+                $"Used Space: {UsedTB.Text}",
+                $"Total Space: {TotalTB.Text}"
+            };
+
+            _tts?.SpeakAsyncCancelAll();
+            foreach (var line in infoToSpeak)
+            {
+                _tts?.SpeakAsync(FormatTextForSpeech(line) + ".");
+            }
+        }
 
         private void SpeakPCInfoToolStripMenuItem_Click(object sender, EventArgs e)
         {
-            SpeechSynthesizer Chuck = new SpeechSynthesizer(); //start speech synth
-            //speak a series of textboxes
-            Chuck.SpeakAsync("CPU Load:  " + CPUTB.Text);
-            Chuck.SpeakAsync("Memory:  " + MemoryTB.Text);
-            Chuck.SpeakAsync("Computer Name:  " + ComputerNameTB.Text);
-            Chuck.SpeakAsync("Current User:  " + UserNameTB.Text);
-            Chuck.SpeakAsync("Up Time:  " + UpTimeTB.Text);
+            _tts?.SpeakAsyncCancelAll();
+
+            var infoToSpeak = new[]
+            {
+                $"CPU Load: {CPUTB.Text}",
+                $"Memory: {MemoryTB.Text}",
+                $"Computer Name: {ComputerNameTB.Text}",
+                $"Current User: {UserNameTB.Text}",
+                $"Up Time: {UpTimeTB.Text}"
+            };
+
+            foreach (var line in infoToSpeak)
+            {
+                _tts?.SpeakAsync(FormatTextForSpeech(line) + ".");
+            }
+        }
+
+        private void browseSelectedDiskToolStripMenuItem_Click(object sender, EventArgs e)
+        {
+            if (!(DriveCB.SelectedItem is DriveEntry entry))
+            {
+                return;
+            }
+
+            try
+            {
+                var drive = new DriveInfo(entry.Path);
+                if (drive.IsReady)
+                {
+                    Process.Start("explorer.exe", drive.Name);
+                }
+                else
+                {
+                    MessageBox.Show(
+                        $"Drive {entry.Path} is not ready.",
+                        "Drive Unavailable",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Warning);
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(
+                    $"Failed to open drive: {ex.Message}",
+                    "Error",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Error);
+            }
+        }
+
+        private void checkFolderSizeToolStripMenuItem_Click(object sender, EventArgs e)
+        {
+            using (FolderSize folderSize = new FolderSize())
+            {
+                folderSize.ShowDialog();
+            }
         }
         #endregion
 
+        /// <summary>
+        /// Helper class to associate drive path with display text in the ComboBox.
+        /// </summary>
+        private class DriveEntry
+        {
+            public string Path { get; }
+            private readonly string _display;
+
+            public DriveEntry(string path, string display)
+            {
+                Path = path;
+                _display = display;
+            }
+
+            public override string ToString() => _display;
+        }
+
+        private static double Clamp(double value, double min, double max)
+        {
+            if (value < min) return min;
+            if (value > max) return max;
+            return value;
+        }
+
+        private void DriveCB_SelectedIndexChanged(object sender, EventArgs e)
+        {
+            // Immediately trigger drive info update when selection changes
+            DriveTimer_Tick(sender, e);
+        }
     }
 }
